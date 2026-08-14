@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-marketplace.json",
+  "name": "self-actuated",
+  "description": "Actuated CLI skills for Claude Code: diagnose and repair CI runner dispatch failures.",
+  "owner": {
+    "name": "Self-Actuated"
+  },
+  "plugins": [
+    {
+      "name": "actuated-cli",
+      "source": "./",
+      "skills": ["./skills/actuated-cli"],
+      "description": "Diagnose and repair actuated CI runner dispatch failures — stuck queued jobs, dead hosts, unreachable runners. GitHub status, queue and runner inspection, agent/VM/controller logs, upgrades, and repairs.",
+      "author": {
+        "name": "Self-Actuated"
+      },
+      "homepage": "https://actuated.dev",
+      "repository": "https://github.com/self-actuated/agent-skills",
+      "license": "MIT",
+      "keywords": ["actuated", "ci", "github-actions", "runner", "diagnostic", "repair"],
+      "strict": false
+    }
+  ]
+}
