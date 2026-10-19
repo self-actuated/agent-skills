@@ -307,7 +307,8 @@ launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"   # restart to
 `agent upgrade` only replaces the on-disk binary — the running process
 keeps the old version until restart.
 
-Or ask the running agent to drain, swap and exit itself — launchd
+**Option B: drain-and-swap through `POST /api/upgrade`** — ask the running
+agent to drain, swap and exit itself — launchd
 KeepAlive restarts it. This goes through the agent's `POST /api/upgrade`
 endpoint (bearer-token authed; drain VMs, swap, exit) and is the safe
 choice when jobs may be running:
