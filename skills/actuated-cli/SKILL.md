@@ -294,7 +294,9 @@ directly, not the controller:
 Two ways to get the new binary running. Either:
 
 ```bash
-# Option A: swap + explicit restart (kickstart does NOT drain; only use when 0 VMs)
+# Option A: swap + explicit restart (kickstart does NOT drain — prefer Option B
+# unless you can guarantee no dispatch; a point-in-time "0 VMs" check is not
+# sufficient, the controller may dispatch between check and restart)
 # Prerequisite: ssh as the macOS user who installed the agent — the LaunchAgent
 # lives in that user's GUI domain, so $(id -u) must be that user's uid.
 ~/.actuated/bin/agent upgrade    # pulls ghcr.io/openfaasltd/actuated-agent-macos:latest, swaps binary in place
@@ -344,9 +346,9 @@ daily (`--schedule-runner-updates` at install time; manage via
 ### macOS memory reporting
 
 The agent's FREE RAM = `vm_stat` free + inactive + speculative pages — a
-conservative floor, not Linux-style `MemAvailable`. Low FREE RAM on an
-idle macOS host usually means app/GUI state or iCloud sync daemons, not
-a bug.
+conservative floor, not Linux-style `MemAvailable`. Treat low FREE RAM as a
+prompt to inspect memory pressure and per-process usage on the host before
+concluding host exhaustion or an agent defect.
 
 ## Repair actions (Linux) and re-queueing (both platforms)
 
@@ -499,7 +501,7 @@ Follow this after the diagnostic workflow:
 |---------|-------------|-----|
 | Jobs queued, 0 VMs, host reachable | Deprecated runner in cached VM image | Linux: `upgrade --force` + `repair` · macOS: `agent base update-runner` on host + `repair` |
 | All hosts unreachable | Agents down, tunnels dead | SSH, `systemctl restart actuated` (macOS: `launchctl kickstart -k` the service) |
-| Host `draining` | Being decommissioned | Wait or `repair` to force |
+| Host `draining` | Decommissioning OR macOS `base update-runner`/self-update in progress | Check the agent log: `Runner update complete, accepting jobs` = update finished, wait; a stuck decommission may be forced with `repair` |
 | Host `starting` | Agent just restarted | Wait 1-2 minutes |
 | VMs die in 7s | Runner version deprecated by GitHub | Linux: `upgrade --force` to pull fresh image · macOS: `agent base update-runner` |
 | Runner registers, no jobs | Runner can't connect to GitHub | Check GitHub status, network |
