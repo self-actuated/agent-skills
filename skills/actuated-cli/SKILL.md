@@ -519,6 +519,8 @@ Follow this after the diagnostic workflow:
 | VM logs | `actuated-cli logs --staff --owner OWNER --age 30m HOST` |
 | Specific VM logs | `actuated-cli logs --staff --owner OWNER --id VMHOST HOST` |
 | Force upgrade (Linux) | `actuated-cli upgrade --staff --owner OWNER --force HOST` |
+| macOS agent update (see full safety notes above) | `~/.actuated/bin/agent upgrade` + restart, or `POST /api/upgrade` |
+| macOS base-runner update | `~/.actuated/bin/agent base update-runner --url http://127.0.0.1:8080` |
 | Repair queue | `actuated-cli repair --staff OWNER` |
 | Restart agent | `actuated-cli restart --staff --owner OWNER HOST` |
 | Reboot host | `actuated-cli restart --staff --owner OWNER --reboot HOST` |
