@@ -273,7 +273,7 @@ directly, not the controller:
 
 ```bash
 ~/.actuated/bin/agent upgrade    # pulls ghcr.io/openfaasltd/actuated-agent-macos:latest, swaps binary in place
-launchctl kickstart -k gui/501/com.openfaas.actuated-agent   # restart to run it
+launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"   # restart to run it
 ```
 
 `agent upgrade` only replaces the on-disk binary — the running process
