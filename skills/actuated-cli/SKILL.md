@@ -29,9 +29,13 @@ Default token: `~/.actuated/PAT` (set via `actuated-cli auth`)
 - **OWNER comes from the runners table.** Each host has a `customer` field
   (e.g. `your-org`, `another-org`). Use this as `--owner` for agent-logs,
   logs, and upgrade commands on that host.
-- After `upgrade --force`, the host cycles: `running` → `starting` → `running`.
-  During `starting` it won't accept jobs. Wait 1-2 minutes, then verify with
-  `runners --staff` that status is `running` again.
+- After `upgrade --force` (Linux hosts), the host cycles: `running` → `starting`
+  → `running`. During `starting` it won't accept jobs. Wait 1-2 minutes, then
+  verify with `runners --staff` that status is `running` again. `base
+  update-runner` on macOS marks the host draining immediately: it rejects new
+  jobs, waits for in-flight VMs to finish, updates the base, then resumes
+  acceptance (up to ~25min total). Update macOS hosts sequentially when
+  continuous capacity is needed.
 - After any repair, always verify: `jobs --staff` (queue cleared?) and
   `runners --staff` (hosts back to "running"?).
 - Run independent checks in parallel: GitHub status, jobs, and runners can all
@@ -227,17 +231,22 @@ likely a label or architecture mismatch. Check host labels vs job labels.
 
 ## Finding & debugging an out-of-date GitHub runner
 
-**Runner ≠ agent.** The GitHub Actions *runner* is embedded in the VM **image**
-(`ghcr.io/your-org/actuated-ubuntu22.04:*`), not in the actuated agent binary
-itself. `agent-logs` (although the agent's systemd service) prints agent-level
-activity; the agent SHA shown in `runners` says nothing about the runner version
-inside the image. To inspect the runner you must look inside a VM (Step 5).
-**`upgrade --force` is how you force a re-pull of the OCI image (the runner
-rootfs)** — that is exactly the fix for a host serving a stale/degraded runner.
+**Runner ≠ agent.** On Linux hosts, the GitHub Actions *runner* is embedded
+in the VM **image** (`ghcr.io/your-org/actuated-ubuntu22.04:*`), not in the
+actuated agent binary itself. On macOS hosts the runner lives in the APFS
+base bundle (see the macOS section below) — either way, `agent-logs`
+(although the agent's systemd service / LaunchAgent) prints agent-level
+activity; the agent SHA shown in `runners` says nothing about the runner
+version inside the image. To inspect the runner you must look inside a VM
+(Step 5). **On Linux, `upgrade --force` forces a re-pull of the OCI image
+(the runner rootfs)** — the fix for a host serving a stale/degraded runner.
+**On macOS, `~/.actuated/bin/agent base update-runner` is the equivalent.**
 Always verify the runner version in VM logs after the upgrade rather than
 assuming it moved.
 
 Find the stale host (there is no direct "runner version" query):
+
+**Linux hosts:**
 
 1. Enumerate image refs per host using the **Step 3** `--json --images` snippet:
    `actuated-cli runners --staff --json --images` → read each reachable host's
@@ -251,16 +260,99 @@ Find the stale host (there is no direct "runner version" query):
    `actions/runner` releases — a runner several releases behind is at risk of
    the "Runner version vX.Y.Z is deprecated … cannot receive messages" error).
 
-**The stale-cache trap:** a host keeps serving a *cached* old image digest even
-after a fixed image is rebuilt and re-published. Watch the agent log snapshot
-SHA256 for each launch (`Preparing snapshot via sha256:<digest>`). If the digest
-stays constant across days (e.g. stuck at `a1b2c3d4…`) the host is pinned to the
-old image and still serves the old runner. Rebuilding/publishing the image alone
-does not fix that host — run `upgrade --force` on it to force the OCI re-pull.
-**Always re-verify** via that VM's log that the runner version actually moved
-after the fix (the snapshot SHA should also change).
+**The stale-cache trap (Linux):** a host keeps serving a *cached* old image
+digest even after a fixed image is rebuilt and re-published. Watch the agent
+log snapshot SHA256 for each launch (`Preparing snapshot via sha256:<digest>`).
+If the digest stays constant across days (e.g. stuck at `a1b2c3d4…`) the host
+is pinned to the old image and still serves the old runner. Rebuilding/publishing
+the image alone does not fix that host — run `upgrade --force` on it to force
+the OCI re-pull. **Always re-verify** via that VM's log that the runner version
+actually moved after the fix (the snapshot SHA should also change).
 
-## Repair actions
+**macOS hosts:** identify the stale runner the same way (read one recent VM's
+log for `Current runner version: 'X.Y.Z'`), then fix on the host:
+
+```bash
+~/.actuated/bin/agent base update-runner --url http://127.0.0.1:8080
+# wait for: Runner update complete, accepting jobs   (in ~/.actuated/logs/agent-daemon.log)
+```
+
+Then trigger a fresh VM and re-read `Current runner version` from its log to
+confirm the fix took.
+
+## macOS hosts: two update paths, neither is `upgrade --force`
+
+`actuated-cli upgrade --force` speaks the Linux agent's protocol. The macOS
+agent (repo: `openfaasltd/actuated-macos`, runs under launchd as
+`com.openfaas.actuated-agent`, GUI login session required) does not accept
+it. Two distinct parts keep a macOS host current, and each has its own
+command run **on the host over ssh**, not through the controller. Option B
+below and `base update-runner` call the agent's local API directly;
+Option A does not:
+
+### Part 1 — agent binary self-update
+
+Two ways to get the new binary running. Either:
+
+```bash
+# Option A: swap + explicit restart (kickstart does NOT drain — prefer Option B
+# unless you can guarantee no dispatch; a point-in-time "0 VMs" check is not
+# sufficient, the controller may dispatch between check and restart)
+# Prerequisite: ssh as the macOS user who installed the agent — the LaunchAgent
+# lives in that user's GUI domain, so $(id -u) must be that user's uid.
+~/.actuated/bin/agent upgrade    # pulls ghcr.io/openfaasltd/actuated-agent-macos:latest, swaps binary in place
+launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"   # restart to run it
+```
+
+`agent upgrade` only replaces the on-disk binary — the running process
+keeps the old version until restart.
+
+**Option B: drain-and-swap through `POST /api/upgrade`** — ask the running
+agent to drain, swap and exit itself — launchd
+KeepAlive restarts it. This goes through the agent's `POST /api/upgrade`
+endpoint (bearer-token authed; drain VMs, swap, exit) and is the safe
+choice when jobs may be running:
+
+```bash
+TOKEN=$(cat ~/.actuated/TOKEN)
+curl --fail-with-body --show-error --silent -X POST \
+  -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/upgrade
+# note the VERSION (SHA) from `actuated-cli runners --staff` first; after
+# the launchd restart, confirm the SHA changed before considering it done
+```
+
+Either way, verify afterwards: `actuated-cli runners --staff` shows the
+new `VERSION` (SHA) and the agent log banner shows `Version: vX.Y.Z
+SHA: ...`.
+
+### Part 2 — base-image runner + guest-agent update
+
+The GitHub Actions runner and the guest-agent live inside the sealed base
+bundle (the `--base` arg in the launchd plist, e.g. `base-xcode.bundle`),
+which is NOT refreshed by Part 1. Update it with:
+
+```bash
+~/.actuated/bin/agent base update-runner --url http://127.0.0.1:8080
+```
+
+This asks the running agent to: drain jobs, resolve the latest
+`actions/runner` release, clone the base APFS disk, install the runner +
+embedded guest-agent into the clone, then promote it on clean detach.
+The original base is untouched on any failure. Progress is in
+`~/.actuated/logs/agent-daemon.log` (the command itself is quiet); the
+log line `Runner update complete, accepting jobs` means done. Takes
+1-25min depending on download. A launchd scheduled variant can do this
+daily (`--schedule-runner-updates` at install time; manage via
+`agent service status runner-update`).
+
+### macOS memory reporting
+
+The agent's FREE RAM = `vm_stat` free + inactive + speculative pages — a
+conservative floor, not Linux-style `MemAvailable`. Treat low FREE RAM as a
+prompt to inspect memory pressure and per-process usage on the host before
+concluding host exhaustion or an agent defect.
+
+## Repair actions (Linux) and re-queueing (both platforms)
 
 ### Force upgrade a host (pulls fresh VM image)
 
@@ -301,7 +393,9 @@ This takes a **customer OWNER** (e.g. `your-org`), not a hostname. It forces
 the controller to re-queue stuck jobs and launch fresh VMs.
 
 **CRITICAL ordering:** Only run `repair` AFTER fixing the root cause. If the
-runner version is deprecated, run `upgrade --force` first, wait for the host
+runner version is deprecated: on Linux run `upgrade --force` first; on macOS
+run `~/.actuated/bin/agent base update-runner` on the host and wait for
+`Runner update complete, accepting jobs` in the agent log. Wait for the host
 to return to `running`, THEN run `repair`. Running repair before fixing the
 cause just creates more failing VMs.
 
@@ -372,13 +466,20 @@ Follow this after the diagnostic workflow:
    - Wait for GitHub to recover. No local action will help.
 
 2. **All hosts unreachable?**
-   - SSH to the machines, check `systemctl status actuated`
-   - Restart: `actuated-cli restart --staff --owner OWNER HOSTNAME`
-   - If still unresponsive: `actuated-cli restart --staff --owner OWNER --reboot HOSTNAME`
+   - Linux: SSH to the machines, check `systemctl status actuated`
+     - Restart: `actuated-cli restart --staff --owner OWNER HOSTNAME`
+     - If still unresponsive: `actuated-cli restart --staff --owner OWNER --reboot HOSTNAME`
+   - macOS: SSH as the user who installed the agent (its LaunchAgent lives in
+     that user's GUI domain), then restart with
+     `launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"`
+     (GUI login session must exist)
 
 3. **Jobs queued, hosts running, 0 VMs, VMs dying in <30s?**
    - Check VM logs → look for `deprecated runner version`
-   - Fix: `upgrade --force` on the host, wait for `running`, then `repair --staff OWNER`
+   - Linux host: `upgrade --force` on the host, wait for `running`, then
+     `repair --staff OWNER`
+   - macOS host: run `~/.actuated/bin/agent base update-runner` on the host
+     (see the macOS section above), then `repair --staff OWNER`
 
 4. **Jobs queued, hosts running, 0 VMs, no VM launches in agent logs?**
    - Check controller logs for "no suitable hosts" or "customer not found"
@@ -400,11 +501,11 @@ Follow this after the diagnostic workflow:
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Jobs queued, 0 VMs, host reachable | Deprecated runner in cached VM image | `upgrade --force` + `repair` |
-| All hosts unreachable | Agents down, tunnels dead | SSH, `systemctl restart actuated` |
-| Host `draining` | Being decommissioned | Wait or `repair` to force |
+| Jobs queued, 0 VMs, host reachable | Deprecated runner in cached VM image | Linux: `upgrade --force` + `repair` · macOS: `agent base update-runner` on host + `repair` |
+| All hosts unreachable | Agents down, tunnels dead | SSH, `systemctl restart actuated` (macOS: `launchctl kickstart -k` the service) |
+| Host `draining` | Decommissioning, OR macOS `base update-runner`, OR macOS `POST /api/upgrade` self-update | Base update: wait for `Runner update complete, accepting jobs` in the agent log. Self-update: wait for the host to return `running` and verify the agent SHA changed in `runners --staff`. A stuck decommission needs completing/reversing the decommission on the host; run `repair` only after capacity is restored |
 | Host `starting` | Agent just restarted | Wait 1-2 minutes |
-| VMs die in 7s | Runner version deprecated by GitHub | `upgrade --force` to pull fresh image |
+| VMs die in 7s | Runner version deprecated by GitHub | Linux: `upgrade --force` to pull fresh image · macOS: `agent base update-runner` |
 | Runner registers, no jobs | Runner can't connect to GitHub | Check GitHub status, network |
 | No matching architecture | Jobs need amd64, only arm64 up | Bring up matching host |
 | All hosts at 20/20 VMs | Concurrency limit reached | Wait for jobs to complete |
@@ -418,7 +519,9 @@ Follow this after the diagnostic workflow:
 | Agent logs | `actuated-cli agent-logs --staff --owner OWNER --age 15m HOST` |
 | VM logs | `actuated-cli logs --staff --owner OWNER --age 30m HOST` |
 | Specific VM logs | `actuated-cli logs --staff --owner OWNER --id VMHOST HOST` |
-| Force upgrade | `actuated-cli upgrade --staff --owner OWNER --force HOST` |
+| Force upgrade (Linux) | `actuated-cli upgrade --staff --owner OWNER --force HOST` |
+| macOS agent update (see full safety notes above) | `~/.actuated/bin/agent upgrade` + restart, or `POST /api/upgrade` |
+| macOS base-runner update | `~/.actuated/bin/agent base update-runner --url http://127.0.0.1:8080` |
 | Repair queue | `actuated-cli repair --staff OWNER` |
 | Restart agent | `actuated-cli restart --staff --owner OWNER HOST` |
 | Reboot host | `actuated-cli restart --staff --owner OWNER --reboot HOST` |
