@@ -271,19 +271,30 @@ directly, not the controller:
 
 ### Part 1 — agent binary self-update
 
+Two ways to get the new binary running. Either:
+
 ```bash
+# Option A: swap + explicit restart (kickstart does NOT drain; only use when 0 VMs)
 ~/.actuated/bin/agent upgrade    # pulls ghcr.io/openfaasltd/actuated-agent-macos:latest, swaps binary in place
 launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"   # restart to run it
 ```
 
 `agent upgrade` only replaces the on-disk binary — the running process
-keeps the old version until restart. Verify afterwards: `actuated-cli
-runners` shows the new `VERSION` (SHA) and the agent log banner shows
-`Version: vX.Y.Z SHA: ...`.
+keeps the old version until restart.
 
-The running agent also accepts `POST /api/upgrade` on its local API
-(drains VMs, swaps, exits; launchd KeepAlive restarts it) — that is what
-the CLI command orchestrates.
+Or ask the running agent to drain, swap and exit itself — launchd
+KeepAlive restarts it. This goes through the agent's `POST /api/upgrade`
+endpoint (bearer-token authed; drain VMs, swap, exit) and is the safe
+choice when jobs may be running:
+
+```bash
+TOKEN=$(cat ~/.actuated/TOKEN)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/upgrade
+```
+
+Either way, verify afterwards: `actuated-cli runners --staff` shows the
+new `VERSION` (SHA) and the agent log banner shows `Version: vX.Y.Z
+SHA: ...`.
 
 ### Part 2 — base-image runner + guest-agent update
 
@@ -430,7 +441,10 @@ Follow this after the diagnostic workflow:
 
 3. **Jobs queued, hosts running, 0 VMs, VMs dying in <30s?**
    - Check VM logs → look for `deprecated runner version`
-   - Fix: `upgrade --force` on the host, wait for `running`, then `repair --staff OWNER`
+   - Linux host: `upgrade --force` on the host, wait for `running`, then
+     `repair --staff OWNER`
+   - macOS host: run `~/.actuated/bin/agent base update-runner` on the host
+     (see the macOS section above), then `repair --staff OWNER`
 
 4. **Jobs queued, hosts running, 0 VMs, no VM launches in agent logs?**
    - Check controller logs for "no suitable hosts" or "customer not found"
@@ -452,11 +466,11 @@ Follow this after the diagnostic workflow:
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Jobs queued, 0 VMs, host reachable | Deprecated runner in cached VM image | `upgrade --force` + `repair` |
-| All hosts unreachable | Agents down, tunnels dead | SSH, `systemctl restart actuated` |
+| Jobs queued, 0 VMs, host reachable | Deprecated runner in cached VM image | Linux: `upgrade --force` + `repair` · macOS: `agent base update-runner` on host + `repair` |
+| All hosts unreachable | Agents down, tunnels dead | SSH, `systemctl restart actuated` (macOS: `launchctl kickstart -k` the service) |
 | Host `draining` | Being decommissioned | Wait or `repair` to force |
 | Host `starting` | Agent just restarted | Wait 1-2 minutes |
-| VMs die in 7s | Runner version deprecated by GitHub | `upgrade --force` to pull fresh image |
+| VMs die in 7s | Runner version deprecated by GitHub | Linux: `upgrade --force` to pull fresh image · macOS: `agent base update-runner` |
 | Runner registers, no jobs | Runner can't connect to GitHub | Check GitHub status, network |
 | No matching architecture | Jobs need amd64, only arm64 up | Bring up matching host |
 | All hosts at 20/20 VMs | Concurrency limit reached | Wait for jobs to complete |
