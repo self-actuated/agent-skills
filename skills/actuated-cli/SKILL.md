@@ -260,6 +260,58 @@ does not fix that host — run `upgrade --force` on it to force the OCI re-pull.
 **Always re-verify** via that VM's log that the runner version actually moved
 after the fix (the snapshot SHA should also change).
 
+## macOS hosts: two update paths, neither is `upgrade --force`
+
+`actuated-cli upgrade --force` speaks the Linux agent's protocol. The macOS
+agent (repo: `openfaasltd/actuated-macos`, runs under launchd as
+`com.openfaas.actuated-agent`, GUI login session required) does not accept
+it. Two distinct parts keep a macOS host current, and each has its own
+command run **on the host over ssh** — they hit the agent's local API
+directly, not the controller:
+
+### Part 1 — agent binary self-update
+
+```bash
+~/.actuated/bin/agent upgrade    # pulls ghcr.io/openfaasltd/actuated-agent-macos:latest, swaps binary in place
+launchctl kickstart -k gui/501/com.openfaas.actuated-agent   # restart to run it
+```
+
+`agent upgrade` only replaces the on-disk binary — the running process
+keeps the old version until restart. Verify afterwards: `actuated-cli
+runners` shows the new `VERSION` (SHA) and the agent log banner shows
+`Version: vX.Y.Z SHA: ...`.
+
+The running agent also accepts `POST /api/upgrade` on its local API
+(drains VMs, swaps, exits; launchd KeepAlive restarts it) — that is what
+the CLI command orchestrates.
+
+### Part 2 — base-image runner + guest-agent update
+
+The GitHub Actions runner and the guest-agent live inside the sealed base
+bundle (the `--base` arg in the launchd plist, e.g. `base-xcode.bundle`),
+which is NOT refreshed by Part 1. Update it with:
+
+```bash
+~/.actuated/bin/agent base update-runner --url http://127.0.0.1:8080
+```
+
+This asks the running agent to: drain jobs, resolve the latest
+`actions/runner` release, clone the base APFS disk, install the runner +
+embedded guest-agent into the clone, then promote it on clean detach.
+The original base is untouched on any failure. Progress is in
+`~/.actuated/logs/agent-daemon.log` (the command itself is quiet); the
+log line `Runner update complete, accepting jobs` means done. Takes
+1-25min depending on download. A launchd scheduled variant can do this
+daily (`--schedule-runner-updates` at install time; manage via
+`agent service status runner-update`).
+
+### macOS memory reporting
+
+The agent's FREE RAM = `vm_stat` free + inactive + speculative pages — a
+conservative floor, not Linux-style `MemAvailable`. Low FREE RAM on an
+idle macOS host usually means app/GUI state or iCloud sync daemons, not
+a bug.
+
 ## Repair actions
 
 ### Force upgrade a host (pulls fresh VM image)
