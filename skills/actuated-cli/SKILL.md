@@ -286,8 +286,9 @@ confirm the fix took.
 agent (repo: `openfaasltd/actuated-macos`, runs under launchd as
 `com.openfaas.actuated-agent`, GUI login session required) does not accept
 it. Two distinct parts keep a macOS host current, and each has its own
-command run **on the host over ssh** — they hit the agent's local API
-directly, not the controller:
+command run **on the host over ssh**, not through the controller. Option B
+below and `base update-runner` call the agent's local API directly;
+Option A does not:
 
 ### Part 1 — agent binary self-update
 
