@@ -502,7 +502,7 @@ Follow this after the diagnostic workflow:
 |---------|-------------|-----|
 | Jobs queued, 0 VMs, host reachable | Deprecated runner in cached VM image | Linux: `upgrade --force` + `repair` · macOS: `agent base update-runner` on host + `repair` |
 | All hosts unreachable | Agents down, tunnels dead | SSH, `systemctl restart actuated` (macOS: `launchctl kickstart -k` the service) |
-| Host `draining` | Decommissioning, OR macOS `base update-runner`, OR macOS `POST /api/upgrade` self-update | Base update: wait for `Runner update complete, accepting jobs` in the agent log. Self-update: wait for the host to return `running` and verify the agent SHA changed in `runners --staff`. Stuck decommission may be forced with `repair` |
+| Host `draining` | Decommissioning, OR macOS `base update-runner`, OR macOS `POST /api/upgrade` self-update | Base update: wait for `Runner update complete, accepting jobs` in the agent log. Self-update: wait for the host to return `running` and verify the agent SHA changed in `runners --staff`. A stuck decommission needs completing/reversing the decommission on the host; run `repair` only after capacity is restored |
 | Host `starting` | Agent just restarted | Wait 1-2 minutes |
 | VMs die in 7s | Runner version deprecated by GitHub | Linux: `upgrade --force` to pull fresh image · macOS: `agent base update-runner` |
 | Runner registers, no jobs | Runner can't connect to GitHub | Check GitHub status, network |
