@@ -246,6 +246,8 @@ assuming it moved.
 
 Find the stale host (there is no direct "runner version" query):
 
+**Linux hosts:**
+
 1. Enumerate image refs per host using the **Step 3** `--json --images` snippet:
    `actuated-cli runners --staff --json --images` → read each reachable host's
    `imageRef`.
@@ -258,14 +260,25 @@ Find the stale host (there is no direct "runner version" query):
    `actions/runner` releases — a runner several releases behind is at risk of
    the "Runner version vX.Y.Z is deprecated … cannot receive messages" error).
 
-**The stale-cache trap:** a host keeps serving a *cached* old image digest even
-after a fixed image is rebuilt and re-published. Watch the agent log snapshot
-SHA256 for each launch (`Preparing snapshot via sha256:<digest>`). If the digest
-stays constant across days (e.g. stuck at `a1b2c3d4…`) the host is pinned to the
-old image and still serves the old runner. Rebuilding/publishing the image alone
-does not fix that host — run `upgrade --force` on it to force the OCI re-pull.
-**Always re-verify** via that VM's log that the runner version actually moved
-after the fix (the snapshot SHA should also change).
+**The stale-cache trap (Linux):** a host keeps serving a *cached* old image
+digest even after a fixed image is rebuilt and re-published. Watch the agent
+log snapshot SHA256 for each launch (`Preparing snapshot via sha256:<digest>`).
+If the digest stays constant across days (e.g. stuck at `a1b2c3d4…`) the host
+is pinned to the old image and still serves the old runner. Rebuilding/publishing
+the image alone does not fix that host — run `upgrade --force` on it to force
+the OCI re-pull. **Always re-verify** via that VM's log that the runner version
+actually moved after the fix (the snapshot SHA should also change).
+
+**macOS hosts:** identify the stale runner the same way (read one recent VM's
+log for `Current runner version: 'X.Y.Z'`), then fix on the host:
+
+```bash
+~/.actuated/bin/agent base update-runner --url http://127.0.0.1:8080
+# wait for: Runner update complete, accepting jobs   (in ~/.actuated/logs/agent-daemon.log)
+```
+
+Then trigger a fresh VM and re-read `Current runner version` from its log to
+confirm the fix took.
 
 ## macOS hosts: two update paths, neither is `upgrade --force`
 
