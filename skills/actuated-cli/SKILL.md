@@ -32,9 +32,10 @@ Default token: `~/.actuated/PAT` (set via `actuated-cli auth`)
 - After `upgrade --force` (Linux hosts), the host cycles: `running` → `starting`
   → `running`. During `starting` it won't accept jobs. Wait 1-2 minutes, then
   verify with `runners --staff` that status is `running` again. `base
-  update-runner` on macOS drains first: existing VMs finish, then the host
-  accepts no new jobs until the update completes (up to ~25min). Update
-  macOS hosts sequentially when continuous capacity is needed.
+  update-runner` on macOS marks the host draining immediately: it rejects new
+  jobs, waits for in-flight VMs to finish, updates the base, then resumes
+  acceptance (up to ~25min total). Update macOS hosts sequentially when
+  continuous capacity is needed.
 - After any repair, always verify: `jobs --staff` (queue cleared?) and
   `runners --staff` (hosts back to "running"?).
 - Run independent checks in parallel: GitHub status, jobs, and runners can all
@@ -281,6 +282,8 @@ Two ways to get the new binary running. Either:
 
 ```bash
 # Option A: swap + explicit restart (kickstart does NOT drain; only use when 0 VMs)
+# Prerequisite: ssh as the macOS user who installed the agent — the LaunchAgent
+# lives in that user's GUI domain, so $(id -u) must be that user's uid.
 ~/.actuated/bin/agent upgrade    # pulls ghcr.io/openfaasltd/actuated-agent-macos:latest, swaps binary in place
 launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"   # restart to run it
 ```
@@ -332,7 +335,7 @@ conservative floor, not Linux-style `MemAvailable`. Low FREE RAM on an
 idle macOS host usually means app/GUI state or iCloud sync daemons, not
 a bug.
 
-## Repair actions (Linux hosts)
+## Repair actions (Linux) and re-queueing (both platforms)
 
 ### Force upgrade a host (pulls fresh VM image)
 
@@ -449,7 +452,8 @@ Follow this after the diagnostic workflow:
    - Linux: SSH to the machines, check `systemctl status actuated`
      - Restart: `actuated-cli restart --staff --owner OWNER HOSTNAME`
      - If still unresponsive: `actuated-cli restart --staff --owner OWNER --reboot HOSTNAME`
-   - macOS: SSH to the host, restart with
+   - macOS: SSH as the user who installed the agent (its LaunchAgent lives in
+     that user's GUI domain), then restart with
      `launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"`
      (GUI login session must exist)
 
