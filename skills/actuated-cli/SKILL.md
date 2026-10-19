@@ -29,9 +29,10 @@ Default token: `~/.actuated/PAT` (set via `actuated-cli auth`)
 - **OWNER comes from the runners table.** Each host has a `customer` field
   (e.g. `your-org`, `another-org`). Use this as `--owner` for agent-logs,
   logs, and upgrade commands on that host.
-- After `upgrade --force`, the host cycles: `running` → `starting` → `running`.
-  During `starting` it won't accept jobs. Wait 1-2 minutes, then verify with
-  `runners --staff` that status is `running` again.
+- After `upgrade --force` (Linux hosts), the host cycles: `running` → `starting`
+  → `running`. During `starting` it won't accept jobs. Wait 1-2 minutes, then
+  verify with `runners --staff` that status is `running` again. macOS hosts
+  keep serving jobs while `base update-runner` runs (it drains first).
 - After any repair, always verify: `jobs --staff` (queue cleared?) and
   `runners --staff` (hosts back to "running"?).
 - Run independent checks in parallel: GitHub status, jobs, and runners can all
@@ -227,13 +228,16 @@ likely a label or architecture mismatch. Check host labels vs job labels.
 
 ## Finding & debugging an out-of-date GitHub runner
 
-**Runner ≠ agent.** The GitHub Actions *runner* is embedded in the VM **image**
-(`ghcr.io/your-org/actuated-ubuntu22.04:*`), not in the actuated agent binary
-itself. `agent-logs` (although the agent's systemd service) prints agent-level
-activity; the agent SHA shown in `runners` says nothing about the runner version
-inside the image. To inspect the runner you must look inside a VM (Step 5).
-**`upgrade --force` is how you force a re-pull of the OCI image (the runner
-rootfs)** — that is exactly the fix for a host serving a stale/degraded runner.
+**Runner ≠ agent.** On Linux hosts, the GitHub Actions *runner* is embedded
+in the VM **image** (`ghcr.io/your-org/actuated-ubuntu22.04:*`), not in the
+actuated agent binary itself. On macOS hosts the runner lives in the APFS
+base bundle (see the macOS section below) — either way, `agent-logs`
+(although the agent's systemd service / LaunchAgent) prints agent-level
+activity; the agent SHA shown in `runners` says nothing about the runner
+version inside the image. To inspect the runner you must look inside a VM
+(Step 5). **On Linux, `upgrade --force` forces a re-pull of the OCI image
+(the runner rootfs)** — the fix for a host serving a stale/degraded runner.
+**On macOS, `~/.actuated/bin/agent base update-runner` is the equivalent.**
 Always verify the runner version in VM logs after the upgrade rather than
 assuming it moved.
 
@@ -323,7 +327,7 @@ conservative floor, not Linux-style `MemAvailable`. Low FREE RAM on an
 idle macOS host usually means app/GUI state or iCloud sync daemons, not
 a bug.
 
-## Repair actions
+## Repair actions (Linux hosts)
 
 ### Force upgrade a host (pulls fresh VM image)
 
@@ -364,7 +368,9 @@ This takes a **customer OWNER** (e.g. `your-org`), not a hostname. It forces
 the controller to re-queue stuck jobs and launch fresh VMs.
 
 **CRITICAL ordering:** Only run `repair` AFTER fixing the root cause. If the
-runner version is deprecated, run `upgrade --force` first, wait for the host
+runner version is deprecated: on Linux run `upgrade --force` first; on macOS
+run `~/.actuated/bin/agent base update-runner` on the host and wait for
+`Runner update complete, accepting jobs` in the agent log. Wait for the host
 to return to `running`, THEN run `repair`. Running repair before fixing the
 cause just creates more failing VMs.
 
