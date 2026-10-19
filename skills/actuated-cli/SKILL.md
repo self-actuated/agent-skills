@@ -31,8 +31,10 @@ Default token: `~/.actuated/PAT` (set via `actuated-cli auth`)
   logs, and upgrade commands on that host.
 - After `upgrade --force` (Linux hosts), the host cycles: `running` → `starting`
   → `running`. During `starting` it won't accept jobs. Wait 1-2 minutes, then
-  verify with `runners --staff` that status is `running` again. macOS hosts
-  keep serving jobs while `base update-runner` runs (it drains first).
+  verify with `runners --staff` that status is `running` again. `base
+  update-runner` on macOS drains first: existing VMs finish, then the host
+  accepts no new jobs until the update completes (up to ~25min). Update
+  macOS hosts sequentially when continuous capacity is needed.
 - After any repair, always verify: `jobs --staff` (queue cleared?) and
   `runners --staff` (hosts back to "running"?).
 - Run independent checks in parallel: GitHub status, jobs, and runners can all
@@ -293,7 +295,10 @@ choice when jobs may be running:
 
 ```bash
 TOKEN=$(cat ~/.actuated/TOKEN)
-curl -s -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/upgrade
+curl --fail-with-body --show-error --silent -X POST \
+  -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/upgrade
+# note the VERSION (SHA) from `actuated-cli runners --staff` first; after
+# the launchd restart, confirm the SHA changed before considering it done
 ```
 
 Either way, verify afterwards: `actuated-cli runners --staff` shows the
@@ -441,9 +446,12 @@ Follow this after the diagnostic workflow:
    - Wait for GitHub to recover. No local action will help.
 
 2. **All hosts unreachable?**
-   - SSH to the machines, check `systemctl status actuated`
-   - Restart: `actuated-cli restart --staff --owner OWNER HOSTNAME`
-   - If still unresponsive: `actuated-cli restart --staff --owner OWNER --reboot HOSTNAME`
+   - Linux: SSH to the machines, check `systemctl status actuated`
+     - Restart: `actuated-cli restart --staff --owner OWNER HOSTNAME`
+     - If still unresponsive: `actuated-cli restart --staff --owner OWNER --reboot HOSTNAME`
+   - macOS: SSH to the host, restart with
+     `launchctl kickstart -k "gui/$(id -u)/com.openfaas.actuated-agent"`
+     (GUI login session must exist)
 
 3. **Jobs queued, hosts running, 0 VMs, VMs dying in <30s?**
    - Check VM logs → look for `deprecated runner version`
@@ -490,7 +498,7 @@ Follow this after the diagnostic workflow:
 | Agent logs | `actuated-cli agent-logs --staff --owner OWNER --age 15m HOST` |
 | VM logs | `actuated-cli logs --staff --owner OWNER --age 30m HOST` |
 | Specific VM logs | `actuated-cli logs --staff --owner OWNER --id VMHOST HOST` |
-| Force upgrade | `actuated-cli upgrade --staff --owner OWNER --force HOST` |
+| Force upgrade (Linux) | `actuated-cli upgrade --staff --owner OWNER --force HOST` |
 | Repair queue | `actuated-cli repair --staff OWNER` |
 | Restart agent | `actuated-cli restart --staff --owner OWNER HOST` |
 | Reboot host | `actuated-cli restart --staff --owner OWNER --reboot HOST` |
